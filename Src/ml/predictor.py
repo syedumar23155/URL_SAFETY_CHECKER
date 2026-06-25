@@ -2,63 +2,67 @@
 import re
 import pickle
 import numpy as np
+import os
 from urllib.parse import urlparse
-from config import MODEL_PATH, SCALER_PATH
 
+MODEL_PATH  = "data/models/rf_model.pkl"
+SCALER_PATH = "data/models/scaler.pkl"
+
+URL_SHORTENERS = {"bit.ly","tinyurl.com","t.co","goo.gl","ow.ly","short.link","rb.gy"}
 
 def extract_features(url: str) -> list:
-    """Extract 15 numerical features from a URL for the ML model."""
     try:
         parsed   = urlparse(url)
-        hostname = parsed.hostname or ""
+        hostname = (parsed.hostname or "").lower()
         path     = parsed.path or ""
     except Exception:
         return [0] * 15
 
-    features = [
-        len(url),                                                  # 1. URL length
-        len(hostname),                                             # 2. Domain length
-        url.count("."),                                            # 3. Dot count
-        url.count("-"),                                            # 4. Hyphen count
-        url.count("@"),                                            # 5. At-sign count
-        url.count("//"),                                           # 6. Double-slash count
-        url.count("/"),                                            # 7. Slash count
-        url.count("?"),                                            # 8. Query param count
-        len(parsed.query),                                         # 9. Query string length
-        1 if re.match(r'\d+\.\d+\.\d+\.\d+', hostname) else 0,   # 10. IP as host
-        1 if parsed.scheme == "https" else 0,                     # 11. HTTPS flag
-        len(hostname.split(".")),                                  # 12. Subdomain depth
-        len([p for p in path.split("/") if p]),                   # 13. Path depth
-        sum(c.isdigit() for c in hostname),                        # 14. Digits in domain
-        1 if any(s in url for s in ["bit.ly","tinyurl","t.co"]) else 0  # 15. Shortener
+    return [
+        len(url),
+        len(hostname),
+        url.count("."),
+        url.count("-"),
+        url.count("@"),
+        url.count("//"),
+        url.count("/"),
+        url.count("?"),
+        len(parsed.query),
+        1 if re.match(r'^\d{1,3}(\.\d{1,3}){3}$', hostname) else 0,
+        1 if parsed.scheme == "https" else 0,
+        len(hostname.split(".")),
+        len([p for p in path.split("/") if p]),
+        sum(c.isdigit() for c in hostname),
+        1 if any(s in hostname for s in URL_SHORTENERS) else 0
     ]
-    return features
 
+# Load once at startup
+_model  = None
+_scaler = None
+
+def _load():
+    global _model, _scaler
+    if _model is None and os.path.exists(MODEL_PATH):
+        with open(MODEL_PATH, "rb") as f:
+            _model = pickle.load(f)
+        with open(SCALER_PATH, "rb") as f:
+            _scaler = pickle.load(f)
 
 def predict(url: str) -> dict:
-    """
-    Returns ML prediction dict:
-      { verdict: str, confidence: float, available: bool }
-    """
     try:
-        with open(MODEL_PATH, "rb") as f:
-            model = pickle.load(f)
-        with open(SCALER_PATH, "rb") as f:
-            scaler = pickle.load(f)
+        _load()
+        if _model is None:
+            return {"verdict": "UNKNOWN", "confidence": 0.0, "available": False}
 
         features = np.array(extract_features(url)).reshape(1, -1)
-        scaled   = scaler.transform(features)
-        pred     = model.predict(scaled)[0]
-        proba    = model.predict_proba(scaled)[0]
-        confidence = float(max(proba)) * 100
+        scaled   = _scaler.transform(features)
+        pred     = _model.predict(scaled)[0]
+        proba    = _model.predict_proba(scaled)[0]
 
         return {
             "verdict":    "MALICIOUS" if pred == 1 else "SAFE",
-            "confidence": round(confidence, 1),
+            "confidence": round(float(max(proba)) * 100, 1),
             "available":  True
         }
-    except FileNotFoundError:
-        # Model not trained yet — graceful degradation
-        return {"verdict": "UNKNOWN", "confidence": 0.0, "available": False}
     except Exception as e:
         return {"verdict": "UNKNOWN", "confidence": 0.0, "available": False}
