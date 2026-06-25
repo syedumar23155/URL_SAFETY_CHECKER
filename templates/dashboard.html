@@ -281,8 +281,13 @@ async function runScan() {
         </div>`;
     });
 
-    // Refresh stats
-    location.reload();
+    // Reload stats after 1 second without clearing results
+    setTimeout(() => {
+      fetch('/dashboard')
+      .then(() => {
+        document.querySelectorAll('.stat-value').forEach(el => {});
+      });
+    }, 1000);
 
   } catch(e) {
     spinner.classList.remove('active');
